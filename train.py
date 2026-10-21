@@ -7,10 +7,10 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
+# Define the paths for the data and model files
 DATA_PATH = Path(__file__).with_name("data.csv")
 MODEL_PATH = Path(__file__).with_name("model.joblib")
 SALARY = ["salary_min", "salary_max"]
-# Kept in proekt.ipynb after dropping every column with correlation under 0.2.
 FEATURES = [
     "salary_min",
     "salary_max",
@@ -23,22 +23,23 @@ FEATURES = [
     "mentions_trial_or_payment",
 ]
 
+# Load the reviews from the CSV file
 def load_reviews(path=DATA_PATH):
     return pd.read_csv(path)
 
-
-def encode(df, medians=None, columns=None):
-    """Keep the notebook's nine features. Empty salaries are filled with the training median."""
+# Prepare the DataFrame by filling missing salary values with the median and selecting the relevant features
+def prepare_features(df, medians=None, columns=None):
     frame = df.reindex(columns=columns or FEATURES).copy()
     if medians is None:
         medians = frame[SALARY].median()
     frame[SALARY] = frame[SALARY].fillna(medians)
     return frame, medians
 
-
-class ReviewModel:
+# The engine of the program, its the model and its methods
+class TheModel:
+    # Model initialization, prepares features and scales them, fits a logistic regression model and a NN model
     def __init__(self, reviews):
-        encoded, self.medians = encode(reviews)
+        encoded, self.medians = prepare_features(reviews)
         self.columns = list(encoded.columns)
         self.scaler = StandardScaler().fit(encoded)
         scaled = self._scaled(encoded)
@@ -48,13 +49,15 @@ class ReviewModel:
         self.neighbors = NearestNeighbors(n_neighbors=3).fit(scaled)
         self.reviews = reviews
 
+    # Scale the encoded features using the fitted scaler
     def _scaled(self, encoded):
         scaled = encoded.astype(float)
         scaled[list(encoded.columns)] = self.scaler.transform(encoded)
         return scaled
 
+    # Score a new posting by predicting its scam probability and finding the closest reviews
     def score(self, posting):
-        encoded, _ = encode(posting, self.medians, self.columns)
+        encoded, _ = prepare_features(posting, self.medians, self.columns)
         scaled = self._scaled(encoded)
         verdict = int(self.clf.predict(scaled)[0])
         probability = float(self.clf.predict_proba(scaled)[0, 1])
@@ -63,6 +66,7 @@ class ReviewModel:
         closest.insert(0, "distance", distances[0])
         return verdict, probability, closest
 
+    # Save the model to a file using joblib
     def save(self, path=MODEL_PATH):
         joblib.dump(
             {
@@ -77,10 +81,11 @@ class ReviewModel:
             path,
         )
 
+    # its a bit self-explanatory, loads the model from a file using joblib
     @staticmethod
     def load(path=MODEL_PATH):
         blob = joblib.load(path)
-        model = ReviewModel.__new__(ReviewModel)
+        model = TheModel.__new__(TheModel)
         model.clf = blob["clf"]
         model.scaler = blob["scaler"]
         model.neighbors = blob["neighbors"]
@@ -91,14 +96,14 @@ class ReviewModel:
         return model
 
 
+# again self-explanatory, evaluates the model, using 5-fold cross-validation
 def evaluate(df, quiet=False):
-    """Score five held-out folds. Returns the mean of each metric."""
     y = df["scam"].to_numpy()
     folds = StratifiedKFold(5, shuffle=True, random_state=42)
     scores = {"roc_auc": [], "recall": [], "precision": [], "accuracy": []}
     for train_idx, test_idx in folds.split(df, y):
-        model = ReviewModel(df.iloc[train_idx])
-        encoded, _ = encode(df.iloc[test_idx], model.medians, model.columns)
+        model = TheModel(df.iloc[train_idx])
+        encoded, _ = prepare_features(df.iloc[test_idx], model.medians, model.columns)
         proba = model.clf.predict_proba(model._scaled(encoded))[:, 1]
         pred = (proba >= 0.5).astype(int)
         actual = y[test_idx]
@@ -118,7 +123,7 @@ def evaluate(df, quiet=False):
 def main():
     reviews = load_reviews()
     print(f"reviewed postings: {len(reviews)}, scam rate: {reviews['scam'].mean():.3f}")
-    model = ReviewModel(reviews)
+    model = TheModel(reviews)
     model.scores = evaluate(reviews)
     model.save()
     print(f"saved {MODEL_PATH.name}")

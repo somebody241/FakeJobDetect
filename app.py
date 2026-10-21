@@ -54,6 +54,8 @@ FLOAT_KEYS = {
 }
 BOOL_KEYS = {"no_pay_range", "mentions_trial_or_payment"}
 MANUAL_FIELDS = ("company_age_months", "company_size", "posting_hour")
+
+# Text parsing regexes for extracting the features from a file
 PAYMENT_RE = re.compile(
     r"trial fee|deposit|payment details|upfront|wire transfer|gift card|"
     r"processing fee|training fee|bank details",
@@ -78,11 +80,11 @@ ALIAS_TO_FIELD = {
     for alias in aliases
 }
 
-
+# Normalize text by removing special characters and converting to lowercase
 def normalize(text):
     return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
 
-
+# Example queries for the SQL interface
 QUERIES = {
     "Scam rate by skills listed": (
         "SELECT skills_listed,\n"
@@ -109,12 +111,14 @@ QUERIES = {
     ),
 }
 
-
+# my precious, cache🙏
+# loads the model into memory and keeps it there
 @st.cache_resource
 def cached_saved_model(saved_at):
-    return train.ReviewModel.load(train.MODEL_PATH)
+    return train.TheModel.load(train.MODEL_PATH)
 
 
+# Set the starting values for the input form
 def form_defaults():
     return {
         "salary_min": None,
@@ -130,6 +134,7 @@ def form_defaults():
     }
 
 
+# Read the text and tables from a PDF file
 def read_pdf(data):
     texts = []
     tables = []
@@ -140,6 +145,7 @@ def read_pdf(data):
     return "\n".join(texts), tables
 
 
+# Read the text and tables from a Word file
 def read_docx(data):
     document = Document(io.BytesIO(data))
     texts = [paragraph.text for paragraph in document.paragraphs]
@@ -149,6 +155,7 @@ def read_docx(data):
     return "\n".join(texts), tables
 
 
+# Convert a raw value into the correct type for its feature
 def parse_value(field, raw):
     text = str(raw).strip()
     if text.lower() in {"", "na", "n/a", "none", "nan", "-"}:
@@ -165,6 +172,8 @@ def parse_value(field, raw):
     return number
 
 
+
+# Absorb a key-value pair into the found dictionary
 def absorb_pair(found, key, raw):
     field = ALIAS_TO_FIELD.get(normalize(key))
     if field is None:
@@ -174,6 +183,7 @@ def absorb_pair(found, key, raw):
         found[field] = value
 
 
+# Extract structured features from the text and tables of a job posting
 def structured_features(text, tables):
     found = {}
     for table in tables:
@@ -203,6 +213,7 @@ def structured_features(text, tables):
     return found
 
 
+# Find features mentioned in normal sentences and unstructured text
 def prose_features(text):
     if not text.strip():
         return {}
@@ -239,6 +250,7 @@ def prose_features(text):
     return found
 
 
+# Extract features from an uploaded file
 def extract_upload(name, data):
     lower = name.lower()
     if lower.endswith(".pdf"):
@@ -263,6 +275,7 @@ def extract_upload(name, data):
     return found, notes
 
 
+# Clamp a value to the specified range
 def clamp(key, value):
     limits = {
         "salary_min": (0, None),
@@ -281,6 +294,7 @@ def clamp(key, value):
     return value
 
 
+# Absorb the extracted features into the Streamlit session state and update the filled note
 def apply_extracted(found, notes):
     for key, value in found.items():
         if key in BOOL_KEYS:
@@ -300,6 +314,7 @@ def apply_extracted(found, notes):
         )
 
 
+# Check the form and create a DataFrame from the filled values
 def posting_frame():
     no_pay = bool(st.session_state.no_pay_range)
     required = [
@@ -328,8 +343,9 @@ def posting_frame():
     return pd.DataFrame([row])
 
 
+# Calculate how much each feature pushes the model toward a scam verdict
 def feature_rows(model, posting):
-    encoded, _ = train.encode(posting, model.medians, model.columns)
+    encoded, _ = train.prepare_features(posting, model.medians, model.columns)
     scaled = model._scaled(encoded).iloc[0]
     coefficients = model.clf.coef_[0]
     rows = []
@@ -341,6 +357,7 @@ def feature_rows(model, posting):
     return rows
 
 
+# Format one feature value for displaying to the user
 def display_value(name, posting):
     row = posting.iloc[0]
     if name == "mentions_trial_or_payment":
@@ -355,10 +372,12 @@ def display_value(name, posting):
     return str(value)
 
 
+# Convert an internal feature name into its user-facing label
 def feature_label(name):
     return LABELS.get(name, name)
 
 
+# Create the lines that explain which features raise or lower the scam probability
 def pattern_lines(model, posting):
     rows = feature_rows(model, posting)
     if pd.isna(posting.iloc[0]["salary_min"]):
@@ -374,6 +393,7 @@ def pattern_lines(model, posting):
     return lines
 
 
+# Create the text summary shown after a posting is checked
 def result_text(verdict, probability, closest, lines):
     label = "scam" if verdict == 1 else "legitimate"
     written = [
@@ -394,7 +414,9 @@ def result_text(verdict, probability, closest, lines):
     return "\n".join(written)
 
 
+# the crown jewel, the scam and legitimate verdict panel
 def verdict_panel(verdict, probability):
+    # Builds one side of the verdict panel
     def side(title, detail, lit, color):
         background = color if lit else "#f4f4f5"
         foreground = "#ffffff" if lit else "#71717a"
@@ -422,6 +444,7 @@ def verdict_panel(verdict, probability):
     st.markdown(html, unsafe_allow_html=True)
 
 
+# Format the closest postings for display in a table
 def neighbor_table(closest, features):
     show = closest[["distance", "scam", *features]].copy()
     show["distance"] = show["distance"].round(2)
@@ -430,6 +453,7 @@ def neighbor_table(closest, features):
     return show
 
 
+# Display the reviewed postings, statistics, charts, and filters
 def render_backlog(reviews, scores, features):
     st.subheader("Reviewed backlog")
     st.write(
@@ -510,6 +534,7 @@ def render_backlog(reviews, scores, features):
     st.dataframe(view[["category", *features, "scam"]], hide_index=True)
 
 
+# Turn a query result into chart data when possible
 def chartable(result):
     if result.empty or result.shape[1] < 2:
         return None
@@ -520,6 +545,7 @@ def chartable(result):
     return result.set_index(label)[number]
 
 
+# Display the SQL query interface for the reviewed postings
 def render_query(reviews):
     st.subheader("Query the backlog")
     st.write(
@@ -550,6 +576,7 @@ def render_query(reviews):
             st.bar_chart(chart)
 
 
+# Display the upload form, manual inputs, and prediction result
 def render_check(model, scores):
     st.subheader("Check a new posting")
     st.write(
@@ -627,6 +654,7 @@ def render_check(model, scores):
     st.text(st.session_state.pattern_body)
 
 
+# Set up missing Streamlit session values and clear old form versions
 def ensure_state(defaults):
     # Version 2 clears the old median values that used to sit in the form.
     if st.session_state.get("form_version") != 2:
@@ -644,6 +672,7 @@ def ensure_state(defaults):
     st.session_state.setdefault("pattern_body", "")
 
 
+# Build the Streamlit application pages
 def render():
     st.set_page_config(page_title="Job posting check", layout="wide")
     if not train.MODEL_PATH.exists():
@@ -669,6 +698,7 @@ def render():
         render_query(reviews)
 
 
+# Check whether the file is being run directly by Streamlit
 def running_in_streamlit():
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
